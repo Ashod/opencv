@@ -326,12 +326,18 @@ imread_( const String& filename, int flags, int hdrtype, Mat* mat=0 )
 *
 * @param[in] filename File to load
 * @param[in] flags Flags
-* @param[in] mats Reference to C++ vector<Mat> object to hold the images
+* @param[in] onImRead A callback called upon loading each page of the image.
+* @param[in] userdata A user-provided generic pointer passed to the callback.
 *
 */
 static bool
-imreadmulti_(const String& filename, int flags, std::vector<Mat>& mats)
+imreadmulti_(const String& filename, int flags, ImReadCallback onImRead, void* userdata)
 {
+    if (!onImRead){
+        // Can't work without a valid callback.
+        return 0;
+    }
+
     /// Search for the relevant decoder to handle the imagery
     ImageDecoder decoder;
 
@@ -358,7 +364,7 @@ imreadmulti_(const String& filename, int flags, std::vector<Mat>& mats)
     if (!decoder->readHeader())
         return 0;
 
-    for (;;)
+    do
     {
         // grab the decoded type
         int type = decoder->type();
@@ -374,21 +380,19 @@ imreadmulti_(const String& filename, int flags, std::vector<Mat>& mats)
                 type = CV_MAKETYPE(CV_MAT_DEPTH(type), 1);
         }
 
-        // read the image data
+        // Pages can have different sizes.
         Mat mat(decoder->height(), decoder->width(), type);
-        if (!decoder->readData(mat))
-        {
-            break;
-        }
 
-        mats.push_back(mat);
-        if (!decoder->nextPage())
+        // Read image data and pass to callback.
+        if (!decoder->readData(mat) ||
+            !onImRead(mat, userdata))
         {
-            break;
+            return false;
         }
     }
+    while (decoder->nextPage());
 
-    return !mats.empty();
+    return true;
 }
 
 /**
@@ -411,6 +415,19 @@ Mat imread( const String& filename, int flags )
     return img;
 }
 
+static bool
+onImread_(Mat& mat, void* userdata)
+{
+    if (userdata)
+    {
+        std::vector<Mat>* mats = reinterpret_cast<std::vector<Mat>*>(userdata);
+        mats->push_back(mat);
+        return true;
+    }
+
+    return false;
+}
+
 /**
 * Read a multi-page image
 *
@@ -423,7 +440,23 @@ Mat imread( const String& filename, int flags )
 */
 bool imreadmulti(const String& filename, std::vector<Mat>& mats, int flags)
 {
-    return imreadmulti_(filename, flags, mats);
+    return imreadmulti_(filename, flags, onImread_, &mats);
+}
+
+/**
+* Read an image and call user callback on each page.
+*
+*  This function merely calls the actual implementation above and returns itself.
+*
+* @param[in] filename File to load
+* @param[in] onImRead A callback called upon loading each page of the image.
+* @param[in] userdata A user-provided generic pointer passed to the callback.
+* @param[in] flags Flags you wish to set.
+*
+*/
+bool imreadex(const String& filename, ImReadCallback onImRead, void* userdata, int flags)
+{
+    return imreadmulti_(filename, flags, onImRead, userdata);
 }
 
 static bool imwrite_( const String& filename, const Mat& image,
